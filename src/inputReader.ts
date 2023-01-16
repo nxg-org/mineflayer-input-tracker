@@ -46,23 +46,6 @@ function modifyControls(controls: ControlStateHandler, state: States): ControlSt
   return controls;
 }
 
-function getControls(state:States): ControlState[] {
-  switch (state) {
-    case States.NONE:
-      return [];
-    case States.CROUCHING:
-      return ["sneak"]
-    case States.SPRINTING:
-      return ["sprint"]
-    case States.JUMPING:
-      return ["jump"]
-    case States.CROUCHJUMPING:
-      return ["sneak", "jump"]
-    case States.SPRINTJUMPING:
-      return ["sprint", "jump"]
-  }
-
-}
 
 function countDecimals(value: number) {
   if (Math.floor(value) !== value) return value.toString().split(".")[1].length || 0;
@@ -216,15 +199,14 @@ export class InputReader extends BaseSimulator {
     res.controlState = firstControl ?? info.controlState;
     this.targets[e.id] = res;
 
-    // debug purposes.
+    //  // debug purposes.
     // if (tick < tickCount) {
     //   if (minDist > 0) {
     //     console.log("FAILED:", tick, tickCount, minDist, (100 * failCount / totalCount).toFixed(3))
     //     failCount++;
     //   } 
     // }
-    // console.log(minDist, tickCount);
-   
+    // console.log(minDist, tick, tickCount);
     // totalCount++;
   };
 }
