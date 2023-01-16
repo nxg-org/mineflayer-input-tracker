@@ -9,11 +9,11 @@ const CROUCH_HEIGHT = NAMED_ENTITY_HEIGHT - 0.08;
 var States;
 (function (States) {
     States[States["NONE"] = 0] = "NONE";
-    States[States["CROUCHING"] = 1] = "CROUCHING";
     States[States["JUMPING"] = 2] = "JUMPING";
-    States[States["CROUCHJUMPING"] = 3] = "CROUCHJUMPING";
+    States[States["CROUCHING"] = 3] = "CROUCHING";
     States[States["SPRINTING"] = 4] = "SPRINTING";
-    States[States["SPRINTJUMPING"] = 5] = "SPRINTJUMPING";
+    States[States["CROUCHJUMPING"] = 5] = "CROUCHJUMPING";
+    States[States["SPRINTJUMPING"] = 6] = "SPRINTJUMPING";
 })(States = exports.States || (exports.States = {}));
 function modifyControls(controls, state) {
     switch (state) {
@@ -22,6 +22,7 @@ function modifyControls(controls, state) {
             break;
         case States.SPRINTING:
             controls.set("sprint", true);
+            break;
         case States.JUMPING:
             controls.set("jump", true);
             break;
@@ -35,6 +36,11 @@ function modifyControls(controls, state) {
             break;
     }
     return controls;
+}
+function countDecimals(value) {
+    if (Math.floor(value) !== value)
+        return value.toString().split(".")[1].length || 0;
+    return 0;
 }
 /**
  * Note: this tracker will never be perfect because we receive one position update every TWO ticks.
@@ -59,64 +65,10 @@ class InputReader extends mineflayer_physics_util_1.BaseSimulator {
         this.targets = {};
         this._enabled = false;
         this.lastChecked = Date.now();
-        this.trackJumps = (entity) => {
-            if (!this.targets[entity.id])
-                return;
-            const check = Date.now();
-            // console.log(check - this.lastChecked);
-            this.lastChecked = check;
-            const info = this.targets[entity.id];
-            const e = info.entity;
-            const orgPos = e.position.clone();
-            const orgDir = orgPos.normalize();
-            const inpInfo = [];
-            const ectx = mineflayer_physics_util_1.EPhysicsCtx.FROM_ENTITY(this.ctx, e);
-            let state = States.NONE;
-            if (e.crouching)
-                state = States.CROUCHING;
-            else if (e.sprinting)
-                state = States.SPRINTING; // prefer sprint over crouch (override).
-            // 0 -> 2 for jump, 1 -> 3 for crouch jump, 2 -> 4 for sprint jump.
-            if (entity.position.y > info.lastPos.y && !entity.onGround)
-                state += 2;
-            // first, sort out tangent movement options.
-            for (const dir of InputReader.DIRECTIONS) {
-                const controls = modifyControls(mineflayer_physics_util_1.ControlStateHandler.DEFAULT(), state);
-                controls.set(dir, true);
-                console.log("first", controls.get(dir), dir);
-                const res = this.predictForwardRaw(ectx, this.bot.world, 1, controls);
-                const resDir = res.position.normalize();
-                let angle = Math.acos(orgPos.dot(res.position) / (orgPos.norm() * res.position.norm())); // gets angle, 0 - 2PI
-                angle = (angle * 180) / Math.PI; // to degrees.
-                console.log(orgPos, res.position);
-                console.log(dir, angle);
-                if (Math.abs(angle - 90) < 45)
-                    continue; // skip considering this, too tangent of a move to matter.
-                console.log("pushing", dir);
-                inpInfo.push([dir, res]);
-                ectx.state.updateFromEntity(e);
-            }
-            let closestMatch = Infinity;
-            let ret = mineflayer_physics_util_1.ControlStateHandler.DEFAULT();
-            // second, simulate the good options again to confirm we are moving in the right direction.
-            for (const [dir, res] of inpInfo) {
-                const newCtx = mineflayer_physics_util_1.EPhysicsCtx.FROM_ENTITY_STATE(this.ctx, res); // TODO: generalize to any entity type.
-                console.log("second", newCtx.state.controlState.get(dir), dir);
-                const newRes = this.predictForwardRaw(newCtx, this.bot.world, 1);
-                let angle = Math.acos(orgPos.dot(newRes.position) / (orgPos.norm() * newRes.position.norm())); // gets angle, 0 - 2PI
-                if (angle < closestMatch) {
-                    closestMatch = angle;
-                    ret = newRes.controlState;
-                }
-            }
-            // end
-            info.lastPos = orgPos;
-            info.controls = ret;
-        };
         this.sprintHandler = (packet) => {
             if (!this.targets[packet.entityId])
                 return;
-            const entity = this.targets[packet.entityId].entity;
+            const entity = this.bot.entities[packet.entityId];
             const bitField = packet.metadata.find((p) => p.key === 0);
             if (bitField === undefined) {
                 return;
@@ -128,16 +80,81 @@ class InputReader extends mineflayer_physics_util_1.BaseSimulator {
                 entity.sprinting = false;
             }
         };
+        this.trackJumps = (e) => {
+            if (!this.targets[e.id])
+                return;
+            const info = this.targets[e.id];
+            // look update, update state.
+            if ((e.yaw !== info.yaw || e.pitch !== info.pitch) && e.position.equals(info.position)) {
+                info.yaw = e.yaw;
+                info.pitch = e.pitch;
+                return;
+            }
+            const check = Date.now();
+            const tickCount = Math.round((check - this.lastChecked) / 50);
+            this.lastChecked = check;
+            let state = States.NONE;
+            if (e.crouching) {
+                state = States.CROUCHING;
+            }
+            else if (e.sprinting) {
+                state = States.SPRINTING;
+            }
+            // 0 -> 2 for jump, 1 -> 3 for crouch jump, 2 -> 4 for sprint jump.
+            // Note: we assume that if serious decimal, we are free-floating so we are jumping.
+            if (countDecimals(e.position.y) > 3) {
+                console.log(e.position.y, info.position.y, e.onGround);
+                state += 2;
+            }
+            let minDist = Infinity;
+            let minDistLastIter = Infinity;
+            let firstControl = null;
+            let deferBreak = false;
+            loop1: for (let tick = 0; tick < tickCount; tick++) {
+                let lastState = info.clone();
+                for (const lat of [null, "forward", "back"]) {
+                    for (const long of [null, "left", "right"]) {
+                        const controls = modifyControls(mineflayer_physics_util_1.ControlStateHandler.DEFAULT(), state);
+                        if (lat !== null)
+                            controls.set(lat, true);
+                        if (long !== null)
+                            controls.set(long, true);
+                        const ectx = mineflayer_physics_util_1.EPhysicsCtx.FROM_ENTITY_STATE(this.ctx, lastState.clone());
+                        ectx.state.controlState = controls;
+                        const newPos = this.predictForwardRaw(ectx, this.bot.world, 1, controls);
+                        const dist = newPos.position.distanceSquared(e.position);
+                        if (dist < minDist) {
+                            minDist = dist;
+                            firstControl = controls;
+                            lastState = lastState;
+                        }
+                        if (dist === 0)
+                            break loop1;
+                        if (newPos.isCollidedHorizontally)
+                            deferBreak = true;
+                    }
+                    if (deferBreak)
+                        break loop1;
+                }
+                if (minDist < minDistLastIter)
+                    minDistLastIter = minDist;
+                else
+                    break loop1;
+            }
+            const res = mineflayer_physics_util_1.EntityState.CREATE_FROM_ENTITY(this.ctx, e);
+            // very weird glitch where these are flipped. Don't know why.
+            res.controlState = firstControl !== null && firstControl !== void 0 ? firstControl : info.controlState;
+            const tmp = res.controlState.get("left");
+            res.controlState.set("left", res.controlState.get("right"));
+            res.controlState.set("right", tmp);
+            this.targets[e.id] = res;
+        };
     }
     track(entity) {
         if (this.enabled) {
             this.clearInfo(entity.id);
         }
-        this.targets[entity.id] = {
-            entity: entity,
-            lastPos: entity.position.clone(),
-            controls: mineflayer_physics_util_1.ControlStateHandler.DEFAULT(),
-        };
+        this.targets[entity.id] = mineflayer_physics_util_1.EntityState.CREATE_FROM_ENTITY(this.ctx, entity);
         this.enabled = true;
     }
     disable() {
@@ -150,7 +167,7 @@ class InputReader extends mineflayer_physics_util_1.BaseSimulator {
         return this.targets[id];
     }
     getControls(id) {
-        return this.targets[id].controls;
+        return this.targets[id].controlState;
     }
     isTracking(e) {
         return !!this.targets[e.id];
@@ -165,5 +182,3 @@ class InputReader extends mineflayer_physics_util_1.BaseSimulator {
     }
 }
 exports.InputReader = InputReader;
-InputReader.DIRECTIONS = ["forward", "back", "left", "right"];
-InputReader.DIRECTION_MODIFIERS = ["sprint", "sneak", "jump"];
