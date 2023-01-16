@@ -2,6 +2,7 @@ import { ControlStateHandler } from "@nxg-org/mineflayer-physics-util";
 import { Bot, createBot } from "mineflayer";
 import type {Entity} from "prismarine-entity";
 import { loader } from "../src/index";
+const netlog = require("prismarine-inspector")
 
 const bot = createBot({
   auth: "offline",
@@ -10,7 +11,10 @@ const bot = createBot({
   port: 25566,
 });
 
+
+netlog(bot);
 bot.loadPlugin(loader);
+bot.setMaxListeners(1000);
 
 bot.on("spawn", () => {
   bot.on("chat", (username, message) => {
@@ -32,10 +36,10 @@ bot.on("spawn", () => {
 
 function findEntity(desc: string, author: string) {
   return (
-    bot.nearestEntity((e) => e.username === desc) ??
-    bot.nearestEntity((e) => e.name === desc) ??
-    bot.nearestEntity((e) => e.type === desc) ??
-    bot.nearestEntity((e) => e.username === author)
+    bot.nearestEntity((e) => !!e.username && e.username === desc) ??
+    bot.nearestEntity((e) => !!e.name && e.name === desc) ??
+    bot.nearestEntity((e) => !!e.type && e.type === desc) ??
+    bot.nearestEntity((e) => !!e.username && e.username === author)
   );
 }
 

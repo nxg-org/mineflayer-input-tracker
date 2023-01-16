@@ -21,10 +21,11 @@
         "test": "ts-node examples/basic.ts"
     },
     "dependencies": {
-        "@nxg-org/mineflayer-physics-util": "^1.4.5"
+        "@nxg-org/mineflayer-physics-util": "^1.4.6"
     },
     "devDependencies": {
         "mineflayer": "^4.6.0",
+        "prismarine-inspector": "^0.2.0",
         "typescript": "^4.5.2"
     }
 }

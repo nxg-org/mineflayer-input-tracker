@@ -46,6 +46,24 @@ function modifyControls(controls: ControlStateHandler, state: States): ControlSt
   return controls;
 }
 
+function getControls(state:States): ControlState[] {
+  switch (state) {
+    case States.NONE:
+      return [];
+    case States.CROUCHING:
+      return ["sneak"]
+    case States.SPRINTING:
+      return ["sprint"]
+    case States.JUMPING:
+      return ["jump"]
+    case States.CROUCHJUMPING:
+      return ["sneak", "jump"]
+    case States.SPRINTJUMPING:
+      return ["sprint", "jump"]
+  }
+
+}
+
 function countDecimals(value: number) {
   if (Math.floor(value) !== value) return value.toString().split(".")[1].length || 0;
   return 0;
@@ -94,7 +112,8 @@ export class InputReader extends BaseSimulator {
   public clearInfo(id: number) {
     delete this.targets[id];
   }
-  public getInfo(id: number) {
+
+  public getLastState(id: number) {
     return this.targets[id];
   }
 
@@ -119,15 +138,15 @@ export class InputReader extends BaseSimulator {
   private sprintHandler = (packet: { entityId: number; metadata: any[] }) => {
     if (!this.targets[packet.entityId]) return;
 
-    const entity = this.bot.entities[packet.entityId];
+    const entity: Entity & { crouching?: boolean; sprinting?: boolean } = this.bot.entities[packet.entityId];
     const bitField = packet.metadata.find((p) => p.key === 0);
     if (bitField === undefined) {
       return;
     }
     if ((bitField.value & 8) !== 0) {
-      (entity as any).sprinting = true;
-    } else if ((entity as any).sprinting) {
-      (entity as any).sprinting = false;
+      entity.sprinting = true;
+    } else if (entity.sprinting) {
+      entity.sprinting = false;
     }
   };
 
@@ -155,8 +174,7 @@ export class InputReader extends BaseSimulator {
 
     // 0 -> 2 for jump, 1 -> 3 for crouch jump, 2 -> 4 for sprint jump.
     // Note: we assume that if serious decimal, we are free-floating so we are jumping.
-    if (countDecimals(e.position.y) > 3) {
-      console.log(e.position.y, info.position.y, e.onGround);
+    if (countDecimals(e.position.y) > 3 && e.position.y > info.position.y) {
       state += 2;
     }
 
@@ -164,7 +182,8 @@ export class InputReader extends BaseSimulator {
     let minDistLastIter = Infinity;
     let firstControl: ControlStateHandler | null = null;
     let deferBreak = false;
-    loop1: for (let tick = 0; tick < tickCount; tick++) {
+    let tick = 0;
+    loop1: for (tick = 0; tick < tickCount; tick++) {
       let lastState = info.clone();
 
       for (const lat of [null, "forward", "back"] as const) {
@@ -176,6 +195,7 @@ export class InputReader extends BaseSimulator {
           ectx.state.controlState = controls;
           const newPos = this.predictForwardRaw(ectx, this.bot.world, 1, controls);
           const dist = newPos.position.distanceSquared(e.position);
+
           if (dist < minDist) {
             minDist = dist;
             firstControl = controls;
@@ -183,21 +203,32 @@ export class InputReader extends BaseSimulator {
           }
 
           if (dist === 0) break loop1;
-          if (newPos.isCollidedHorizontally) deferBreak = true;
         }
         if (deferBreak) break loop1;
       }
-      if (minDist < minDistLastIter) minDistLastIter = minDist;
+      if (minDist <= minDistLastIter && minDist > 0) minDistLastIter = minDist;
       else break loop1;
+      
     }
 
     const res = EntityState.CREATE_FROM_ENTITY(this.ctx, e);
-    // very weird glitch where these are flipped. Don't know why.
 
     res.controlState = firstControl ?? info.controlState;
-    const tmp = res.controlState.get("left");
-    res.controlState.set("left", res.controlState.get("right"));
-    res.controlState.set("right", tmp);
     this.targets[e.id] = res;
+
+    // debug purposes.
+    // if (tick < tickCount) {
+    //   if (minDist > 0) {
+    //     console.log("FAILED:", tick, tickCount, minDist, (100 * failCount / totalCount).toFixed(3))
+    //     failCount++;
+    //   } 
+    // }
+    // console.log(minDist, tickCount);
+   
+    // totalCount++;
   };
 }
+
+
+let failCount = 0;
+let totalCount = 0;
