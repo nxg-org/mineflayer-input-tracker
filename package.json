@@ -21,7 +21,8 @@
         "test": "ts-node examples/basic.ts"
     },
     "dependencies": {
-        "@nxg-org/mineflayer-physics-util": "^1.4.6"
+        "@nxg-org/mineflayer-physics-util": "^1.4.7",
+        "@nxg-org/mineflayer-tracker": "^1.2.1"
     },
     "devDependencies": {
         "mineflayer": "^4.6.0",
